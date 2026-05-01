@@ -19,4 +19,4 @@ app.conf.update(
     },
 )
 
-app.autodiscover_tasks(["tasks"])
+import tasks  # noqa: F401, E402

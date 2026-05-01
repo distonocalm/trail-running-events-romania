@@ -11,7 +11,6 @@ function groupByMonth(events: Event[]): Map<string, Event[]> {
   const groups = new Map<string, Event[]>();
   for (const event of events) {
     const dateObj = new Date(event.date_start + "T00:00:00");
-    const key = `${dateObj.getFullYear()}-${String(dateObj.getMonth()).padStart(2, "0")}`;
     const label = dateObj.toLocaleString("en", {
       month: "long",
       year: "numeric",
