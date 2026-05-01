@@ -26,50 +26,52 @@ class RunMapScraper(BaseScraper):
         soup = BeautifulSoup(html, "lxml")
         events = []
 
-        # Event cards link to /events/{slug}-{year}
-        event_links = soup.find_all("a", href=re.compile(r"^/events/[^/]+-\d{4}$"))
-
-        for link in event_links:
-            card = link
-
-            # Filter for TRAIL events only
-            type_badge = card.find(string=re.compile(r"^TRAIL$"))
-            if not type_badge:
-                # Also check for elements whose text is TRAIL
-                badges = card.find_all(string=lambda t: t and t.strip() == "TRAIL")
-                if not badges:
+        for card in soup.find_all("article", class_="event-card"):
+            badge = card.find("span", class_="type-badge")
+            if not badge:
+                img = card.find("img", class_="thumb-img")
+                data_type = img.get("data-type", "") if img else ""
+                if data_type.upper() != "TRAIL":
+                    continue
+            else:
+                badge_text = badge.get_text(strip=True).upper()
+                if badge_text != "TRAIL":
                     continue
 
-            # Event URL
-            href = link.get("href", "")
+            title_link = card.select_one("h3.event-title a.event-link")
+            if not title_link:
+                continue
+
+            name = title_link.get_text(strip=True)
+            href = title_link.get("href", "")
             event_url = f"https://runmap.ro{href}" if href else None
 
-            # Name — derive from the slug (strip trailing -YYYY)
-            slug_match = re.search(r"/events/(.+)-(\d{4})$", href)
-            if not slug_match:
-                continue
-            slug = slug_match.group(1)
-            year_from_slug = int(slug_match.group(2))
-
-            # Prefer a visible heading/title inside the card
-            name = self._extract_name(card, slug)
-
-            # Date — text after 📅
-            date_start = self._extract_date(card, year_from_slug)
+            time_tag = card.find("time")
+            date_start = None
+            if time_tag and time_tag.get("datetime"):
+                try:
+                    date_start = date.fromisoformat(time_tag["datetime"])
+                except ValueError:
+                    pass
+            if not date_start:
+                date_start = self._parse_date_text(card)
             if not date_start:
                 continue
 
-            # Location and county — text after 📍
             location, county = self._extract_location(card)
 
-            # Distances — numbers after "Curse:"
-            distances = self._extract_distances(card)
+            chips = card.find_all("span", class_="race-chip")
+            distances = []
+            for chip in chips:
+                try:
+                    km = float(chip.get_text(strip=True))
+                    distances.append({"km": km})
+                except ValueError:
+                    continue
 
-            # Cover image
-            img_tag = card.find("img")
-            image_url = img_tag.get("src") if img_tag else None
+            thumb = card.find("img", class_="thumb-img")
+            image_url = thumb.get("src") if thumb else None
 
-            # external_id
             safe_name = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
             external_id = f"runmap-{safe_name}-{date_start.isoformat()}"
 
@@ -79,85 +81,42 @@ class RunMapScraper(BaseScraper):
                     date_start=date_start,
                     location=location,
                     county=county,
-                    distances=distances,
+                    distances=distances if distances else None,
                     event_url=event_url,
                     image_url=image_url,
                     external_id=external_id,
-                    raw_data={
-                        "source": self.name,
-                        "slug": slug,
-                    },
+                    raw_data={"source": self.name},
                 )
             )
 
         return events
 
-    def _extract_name(self, card, slug: str) -> str:
-        # Try common heading tags first
-        for tag in ("h1", "h2", "h3", "h4", "strong", "b"):
-            el = card.find(tag)
-            if el:
-                text = el.get_text(strip=True)
-                if text:
-                    return text
-        # Fall back to humanising the slug
-        return slug.replace("-", " ").title()
-
-    def _extract_date(self, card, fallback_year: int) -> date | None:
+    def _parse_date_text(self, card) -> date | None:
         text = card.get_text(" ", strip=True)
-        # Look for "📅 <day> <month_name> <year>" pattern
-        match = re.search(
-            r"📅\s*(\d{1,2})\s+(\w+)\s+(\d{4})",
-            text,
-        )
+        match = re.search(r"(\d{1,2})\s+(\w+)\s+(\d{4})", text)
         if match:
-            day = int(match.group(1))
-            month_name = match.group(2).lower()
-            year = int(match.group(3))
+            day, month_name, year = int(match.group(1)), match.group(2).lower(), int(match.group(3))
             month = ROMANIAN_MONTHS.get(month_name)
             if month:
                 return date(year, month, day)
-
-        # Fallback: day + month without explicit year
-        match = re.search(r"📅\s*(\d{1,2})\s+(\w+)", text)
-        if match:
-            day = int(match.group(1))
-            month_name = match.group(2).lower()
-            month = ROMANIAN_MONTHS.get(month_name)
-            if month:
-                return date(fallback_year, month, day)
-
         return None
 
     def _extract_location(self, card) -> tuple[str | None, str | None]:
-        text = card.get_text(" ", strip=True)
-        match = re.search(r"📍\s*(.+?)(?:\s{2,}|$)", text)
-        if not match:
-            return None, None
-
-        location_text = match.group(1).strip()
-
-        # County is in parentheses: "Târgoviște (DAMBOVITA)"
-        county = None
-        county_match = re.search(r"\(([^)]+)\)", location_text)
-        if county_match:
-            county = county_match.group(1).strip()
-
-        return location_text, county
-
-    def _extract_distances(self, card) -> list[dict] | None:
-        text = card.get_text(" ", strip=True)
-        match = re.search(r"Curse:\s*([\d.\s]+)", text)
-        if not match:
-            return None
-
-        distances_text = match.group(1).strip()
-        distances = []
-        for part in distances_text.split():
-            try:
-                km = float(part)
-                distances.append({"km": km})
-            except ValueError:
-                continue
-
-        return distances if distances else None
+        meta_spans = card.find_all("span", class_="meta")
+        for span in meta_spans:
+            if span.find(string=re.compile("📍")):
+                parts = span.find_all("span")
+                location_parts = []
+                county = None
+                for part in parts:
+                    if part.get("aria-hidden"):
+                        continue
+                    if "text-secondary" in (part.get("class") or []):
+                        inner = part.find("span")
+                        if inner:
+                            county = inner.get_text(strip=True)
+                    else:
+                        location_parts.append(part.get_text(strip=True))
+                location = " ".join(location_parts).strip() if location_parts else None
+                return location, county
+        return None, None

@@ -7,30 +7,10 @@ from bs4 import BeautifulSoup
 from scrapers.base import BaseScraper, RawEvent
 
 ROMANIAN_MONTHS = {
-    "IANUARIE": 1,
-    "FEBRUARIE": 2,
-    "MARTIE": 3,
-    "APRILIE": 4,
-    "MAI": 5,
-    "IUNIE": 6,
-    "IULIE": 7,
-    "AUGUST": 8,
-    "SEPTEMBRIE": 9,
-    "OCTOMBRIE": 10,
-    "NOIEMBRIE": 11,
-    "DECEMBRIE": 12,
+    "IANUARIE": 1, "FEBRUARIE": 2, "MARTIE": 3, "APRILIE": 4,
+    "MAI": 5, "IUNIE": 6, "IULIE": 7, "AUGUST": 8,
+    "SEPTEMBRIE": 9, "OCTOMBRIE": 10, "NOIEMBRIE": 11, "DECEMBRIE": 12,
 }
-
-TRAIL_KEYWORDS = ("alergare", "trail")
-SKIP_KEYWORDS = ("neconfirmată", "amânat", "amanat")
-
-
-def _slugify(text: str) -> str:
-    text = text.lower().strip()
-    text = re.sub(r"[^\w\s-]", "", text)
-    text = re.sub(r"[\s_]+", "-", text)
-    text = re.sub(r"-+", "-", text)
-    return text.strip("-")
 
 
 class FisheyeScraper(BaseScraper):
@@ -40,7 +20,6 @@ class FisheyeScraper(BaseScraper):
     def scrape(self) -> list[RawEvent]:
         response = httpx.get(self.base_url, timeout=30, follow_redirects=True)
         response.raise_for_status()
-        response.encoding = "utf-8"
         return self.parse_html(response.text)
 
     def parse_html(self, html: str) -> list[RawEvent]:
@@ -49,81 +28,41 @@ class FisheyeScraper(BaseScraper):
         if not table:
             return []
 
-        tbody = table.find("tbody")
-        rows = tbody.find_all("tr") if tbody else table.find_all("tr")
+        rows = table.find_all("tr")
+        events = []
 
-        # First pass: group multi-row events
-        # A row with no logo in col 1 is a continuation of the previous event
-        grouped_rows: list[list] = []
         for row in rows:
             cells = row.find_all("td")
-            if not cells:
-                continue
-            # Check if col 1 has an image (logo) — primary row
-            has_logo = bool(cells[0].find("img")) if cells else False
-            if has_logo or not grouped_rows:
-                grouped_rows.append([cells])
-            else:
-                grouped_rows[-1].append(cells)
-
-        events = []
-        for cell_groups in grouped_rows:
-            primary = cell_groups[0]
-            if len(primary) < 4:
+            if len(cells) < 7:
                 continue
 
-            # --- Sport type filter ---
-            # Column 2 contains event name + sport type text
-            col2_text = primary[1].get_text(separator=" ", strip=True).lower()
-            if not any(kw in col2_text for kw in TRAIL_KEYWORDS):
+            sport_text = cells[2].get_text(" ", strip=True).lower()
+            if "alergare" not in sport_text and "trail" not in sport_text:
                 continue
 
-            # --- Name & event URL ---
-            name_tag = primary[1].find("h3")
-            if name_tag:
-                name_link = name_tag.find("a")
-                name = name_link.get_text(strip=True) if name_link else name_tag.get_text(strip=True)
-                event_url = name_link["href"] if name_link and name_link.has_attr("href") else None
-            else:
-                name = primary[1].get_text(strip=True)
-                event_url = None
-
-            if not name:
+            name_tag = cells[1].find("h3")
+            if not name_tag:
                 continue
+            name_link = name_tag.find("a")
+            name = name_link.get_text(strip=True) if name_link else name_tag.get_text(strip=True)
+            event_url = name_link["href"] if name_link and name_link.has_attr("href") else None
 
-            # --- Image URL from logo column (col 1) ---
-            img_tag = primary[0].find("img")
-            image_url = None
-            if img_tag:
-                image_url = img_tag.get("src") or img_tag.get("data-src")
-
-            # --- Location & Date from col 4 ---
-            col4_text = primary[3].get_text(separator="\n", strip=True)
-
-            # Skip unconfirmed / postponed
-            col4_lower = col4_text.lower()
-            if any(kw in col4_lower for kw in SKIP_KEYWORDS):
+            date_text = cells[6].get_text(" ", strip=True)
+            if "neconfirmat" in date_text.lower() or "amânat" in date_text.lower():
                 continue
-
-            # Also check continuation rows for extra dates/locations
-            for extra_cells in cell_groups[1:]:
-                if len(extra_cells) >= 4:
-                    col4_text += "\n" + extra_cells[3].get_text(separator="\n", strip=True)
-
-            parsed_date = self._parse_date(col4_text)
+            parsed_date = self._parse_date(date_text)
             if not parsed_date:
                 continue
 
-            location = self._parse_location(col4_text)
+            location = cells[4].get_text(strip=True) or None
 
-            # --- Distances from col 3 ---
-            distances_parts = [primary[2].get_text(separator=" ", strip=True)]
-            for extra_cells in cell_groups[1:]:
-                if len(extra_cells) >= 3:
-                    distances_parts.append(extra_cells[2].get_text(separator=" ", strip=True))
-            distances = self._parse_distances(" ".join(distances_parts))
+            distances = self._parse_distances(cells[3].get_text(" ", strip=True))
 
-            external_id = f"fisheye-{_slugify(name)}-{parsed_date.isoformat()}"
+            img_tag = cells[0].find("img")
+            image_url = (img_tag.get("src") or img_tag.get("data-src")) if img_tag else None
+
+            safe_name = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+            external_id = f"fisheye-{safe_name}-{parsed_date.isoformat()}"
 
             events.append(
                 RawEvent(
@@ -134,25 +73,19 @@ class FisheyeScraper(BaseScraper):
                     event_url=event_url,
                     image_url=image_url,
                     external_id=external_id,
-                    raw_data={
-                        "source": self.name,
-                        "raw_col4": col4_text,
-                    },
+                    raw_data={"source": self.name},
                 )
             )
 
         return events
 
     def _parse_date(self, text: str) -> date | None:
-        """Parse a date from column 4 text. Format: DD MONTHNAME YYYY (uppercase Romanian)."""
-        pattern = r"(\d{1,2})\s+([A-ZĂÎȘȚ]+)\s+(\d{4})"
-        match = re.search(pattern, text)
+        match = re.search(r"(\d{1,2})\s+([A-ZĂÎȘȚ]+)\s+(\d{4})", text.upper())
         if not match:
             return None
         day = int(match.group(1))
-        month_name = match.group(2).upper()
+        month = ROMANIAN_MONTHS.get(match.group(2))
         year = int(match.group(3))
-        month = ROMANIAN_MONTHS.get(month_name)
         if not month:
             return None
         try:
@@ -160,19 +93,8 @@ class FisheyeScraper(BaseScraper):
         except ValueError:
             return None
 
-    def _parse_location(self, text: str) -> str | None:
-        """Extract location from column 4 text (everything before the date)."""
-        pattern = r"(\d{1,2})\s+[A-ZĂÎȘȚ]+\s+\d{4}"
-        match = re.search(pattern, text)
-        if match:
-            location = text[: match.start()].strip().strip(",").strip()
-            return location if location else None
-        return text.strip() if text.strip() else None
-
     def _parse_distances(self, text: str) -> list[dict]:
-        """Parse distances from bullet-separated text like '▪️ Cros 7 km ▪️ Semi 21.6 km'."""
         distances = []
-        # Split on bullet markers (▪️ or ▪ or •)
         parts = re.split(r"[▪️▪•]", text)
         for part in parts:
             part = part.strip()
@@ -182,7 +104,7 @@ class FisheyeScraper(BaseScraper):
             if match:
                 km_str = match.group(1).replace(",", ".")
                 try:
-                    distances.append({"label": part.strip(), "km": float(km_str)})
+                    distances.append({"km": float(km_str)})
                 except ValueError:
                     pass
         return distances
