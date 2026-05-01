@@ -10,6 +10,10 @@ logger = logging.getLogger(__name__)
 
 SCRAPER_REGISTRY = {
     "scrapers.sources.eliterunning": "scrapers.sources.eliterunning.EliteRunningScraper",
+    "scrapers.sources.runmap": "scrapers.sources.runmap.RunMapScraper",
+    "scrapers.sources.fisheye": "scrapers.sources.fisheye.FisheyeScraper",
+    "scrapers.sources.vladcarbune": "scrapers.sources.vladcarbune.VladCarbuneScraper",
+    "scrapers.sources.timeit": "scrapers.sources.timeit.TimeItScraper",
 }
 
 
