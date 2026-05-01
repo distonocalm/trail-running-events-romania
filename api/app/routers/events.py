@@ -42,10 +42,12 @@ def list_events(
         query = query.filter(extract("month", Event.date_start) == month)
 
     if county is not None:
-        query = query.filter(Event.county.ilike(f"%{county}%"))
+        escaped = county.replace("%", r"\%").replace("_", r"\_")
+        query = query.filter(Event.county.ilike(f"%{escaped}%"))
 
     if search is not None:
-        pattern = f"%{search}%"
+        escaped = search.replace("%", r"\%").replace("_", r"\_")
+        pattern = f"%{escaped}%"
         query = query.filter(
             Event.name.ilike(pattern) | Event.location.ilike(pattern)
         )
@@ -83,12 +85,8 @@ def get_event(event_id: UUID, db: Session = Depends(get_db)):
 @router.get("/stats", response_model=StatsResponse)
 def get_stats(db: Session = Depends(get_db)):
     event_count = db.query(Event).count()
-    source_count = 0
-    try:
-        from shared.models import Source
-        source_count = db.query(Source).filter(Source.enabled.is_(True)).count()
-    except Exception:
-        pass
+    from shared.models import Source
+    source_count = db.query(Source).filter(Source.enabled.is_(True)).count()
     county_count = (
         db.query(Event.county).filter(Event.county.isnot(None)).distinct().count()
     )
