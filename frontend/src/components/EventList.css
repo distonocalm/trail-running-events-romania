@@ -1,0 +1,33 @@
+.event-list {
+  padding: 40px 48px 80px;
+  max-width: 1200px;
+}
+
+.month-label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  color: #999;
+  margin-bottom: 20px;
+  margin-top: 48px;
+}
+
+.month-label:first-child {
+  margin-top: 0;
+}
+
+.loading,
+.empty {
+  text-align: center;
+  padding: 80px 0;
+  font-size: 16px;
+  color: #999;
+  font-weight: 500;
+}
+
+@media (max-width: 768px) {
+  .event-list {
+    padding: 24px 16px 60px;
+  }
+}
